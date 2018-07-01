@@ -88,36 +88,20 @@ namespace ts {
             const tagName = getTagName(node);
             let objectProperties: Expression | undefined;
             const attrs = node.attributes.properties;
-            if (attrs.length === 0) {
+            if (compilerOptions.jsx === JsxEmit.Vue) {
+                objectProperties = createVueProperties(tagName, attrs);
+            }
+            else if (attrs.length === 0) {
                 // When there are no attributes, React wants "null"
                 objectProperties = createNull();
             }
             else {
-                // Map spans of JsxAttribute nodes into object literals and spans
-                // of JsxSpreadAttribute nodes into expressions.
-                const segments = flatten<Expression | ObjectLiteralExpression>(
-                    spanMap(attrs, isJsxSpreadAttribute, (attrs, isSpread) => isSpread
-                        ? map(attrs, transformJsxSpreadAttributeToExpression)
-                        : createObjectLiteral(map(attrs, transformJsxAttributeToObjectLiteralElement))
-                    )
-                );
-
-                if (isJsxSpreadAttribute(attrs[0])) {
-                    // We must always emit at least one object literal before a spread
-                    // argument.
-                    segments.unshift(createObjectLiteral());
-                }
-
-                // Either emit one big object literal (no spread attribs), or
-                // a call to the __assign helper.
-                objectProperties = singleOrUndefined(segments);
-                if (!objectProperties) {
-                    objectProperties = createAssignHelper(context, segments);
-                }
+                objectProperties = createReactProperties(attrs);
             }
 
             const element = createExpressionForJsxElement(
                 context.getEmitResolver().getJsxFactoryEntity(currentSourceFile),
+                compilerOptions.jsx!,
                 compilerOptions.reactNamespace!, // TODO: GH#18217
                 tagName,
                 objectProperties,
@@ -133,9 +117,106 @@ namespace ts {
             return element;
         }
 
+        function createVueProperties(tagName: Expression, attrs: NodeArray<JsxAttributeLike>) {
+            // it is a custom element if it contains a hypen or it is not a string literal
+            // Vue treats DOM elements and custom elements differently
+            let isCustomElement = true;
+            if (tagName.kind === SyntaxKind.StringLiteral && (<StringLiteral>tagName).text.indexOf("-") === -1) {
+                isCustomElement = false;
+            }
+
+            return createObjectLiteral(spanMap(
+                attrs,
+                attr => getVuePropertyKind(isCustomElement, attr),
+                createVuePropertyAssignment
+            ));
+        }
+
+        function getVuePropertyKind(isCustomElement: boolean, attr: JsxAttributeLike) {
+            if (isJsxSpreadAttribute(attr)) {
+                /*
+                const expression = transformJsxSpreadAttributeToExpression(attr);
+                const type = expression.contextualType;
+                if (type && type.symbol.members && type.symbol.members.size > 0)
+                    console.log(type.symbol.members);
+                */
+                throw new Error("Not implemented");
+            }
+
+            const name = idText(attr.name);
+
+            if (["class", "style", "slot", "key", "ref"].indexOf(name) > -1) {
+                return name;
+            }
+            else if (name.indexOf("v-") === 0) {
+                return "directives";
+            }
+            else if (name.indexOf("on") === 0) {
+                return "on";
+            }
+            else {
+                return isCustomElement
+                    ? "props"
+                    : (["value", "innerHTML"].indexOf(name) > -1 ? "domProps" : "attrs");
+            }
+        }
+
+        function createVuePropertyAssignment(attrs: JsxAttribute[], key: string) {
+            if (["class", "style", "slot", "key", "ref"].indexOf(key) > -1) {
+                return transformJsxAttributeToObjectLiteralElement(attrs[0]);
+            }
+            else if (key === "directives") {
+                return createPropertyAssignment(key, createArrayLiteral(map(attrs, createVueDirectiveObjectLiteral)));
+            }
+            else {
+                return createPropertyAssignment(key, createObjectLiteral(map(attrs, transformVueAttributeToObjectLiteralElement)));
+            }
+        }
+
+        function createVueDirectiveObjectLiteral(attr: JsxAttribute) {
+            const name = idText(attr.name).substr(2);
+            return createObjectLiteral([
+                createPropertyAssignment("name", createStringLiteral(name)),
+                createPropertyAssignment("value", transformJsxAttributeInitializer(attr.initializer))
+            ]);
+        }
+
+        function transformVueAttributeToObjectLiteralElement(attr: JsxAttribute) {
+            let name = idText(attr.name);
+            if (name.indexOf("on") === 0) {
+                name = name.substr(2);
+            }
+            const propName = name.indexOf("-") > -1 ? createStringLiteral(name) : name;
+            const expression = transformJsxAttributeInitializer(attr.initializer);
+            return createPropertyAssignment(propName, expression);
+        }
+
+        function createReactProperties(attrs: NodeArray<JsxAttributeLike>) {
+            let objectProperties: Expression | undefined;
+            // Map spans of JsxAttribute nodes into object literals and spans
+            // of JsxSpreadAttribute nodes into expressions.
+            const segments = flatten<Expression | ObjectLiteralExpression>(spanMap(attrs, isJsxSpreadAttribute, (attrs, isSpread) => isSpread
+                ? map(attrs, transformJsxSpreadAttributeToExpression)
+                : createObjectLiteral(map(attrs, transformJsxAttributeToObjectLiteralElement))));
+            if (isJsxSpreadAttribute(attrs[0])) {
+                // We must always emit at least one object literal before a spread
+                // argument.
+                segments.unshift(createObjectLiteral());
+            }
+            // Either emit one big object literal (no spread attribs), or
+            // a call to the __assign helper.
+            objectProperties = singleOrUndefined(segments);
+            if (!objectProperties) {
+                objectProperties = createAssignHelper(context, segments);
+            }
+            return objectProperties;
+        }
+
+
         function visitJsxOpeningFragment(node: JsxOpeningFragment, children: ReadonlyArray<JsxChild>, isChild: boolean, location: TextRange) {
             const element = createExpressionForJsxFragment(
                 context.getEmitResolver().getJsxFactoryEntity(currentSourceFile),
+                compilerOptions.jsx!,
                 compilerOptions.reactNamespace!, // TODO: GH#18217
                 mapDefined(children, transformJsxChildToExpression),
                 node,

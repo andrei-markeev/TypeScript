@@ -207,7 +207,8 @@ namespace ts {
             type: createMapFromTemplate({
                 "preserve": JsxEmit.Preserve,
                 "react-native": JsxEmit.ReactNative,
-                "react": JsxEmit.React
+                "react": JsxEmit.React,
+                "vue": JsxEmit.Vue
             }),
             paramType: Diagnostics.KIND,
             showInSimplifiedHelpView: true,

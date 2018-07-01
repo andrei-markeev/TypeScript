@@ -3205,16 +3205,16 @@ namespace ts {
         );
     }
 
-    function createReactNamespace(reactNamespace: string, parent: JsxOpeningLikeElement | JsxOpeningFragment) {
+    function createSynthesizedIdentifier(name: string, parent: JsxOpeningLikeElement | JsxOpeningFragment) {
         // To ensure the emit resolver can properly resolve the namespace, we need to
         // treat this identifier as if it were a source tree node by clearing the `Synthesized`
         // flag and setting a parent node.
-        const react = createIdentifier(reactNamespace || "React");
-        react.flags &= ~NodeFlags.Synthesized;
+        const ident = createIdentifier(name);
+        ident.flags &= ~NodeFlags.Synthesized;
         // Set the parent that is in parse tree
         // this makes sure that parent chain is intact for checker to traverse complete scope tree
-        react.parent = getParseTreeNode(parent);
-        return react;
+        ident.parent = getParseTreeNode(parent);
+        return ident;
     }
 
     function createJsxFactoryExpressionFromEntityName(jsxFactory: EntityName, parent: JsxOpeningLikeElement | JsxOpeningFragment): Expression {
@@ -3225,44 +3225,55 @@ namespace ts {
             return createPropertyAccess(left, right);
         }
         else {
-            return createReactNamespace(idText(jsxFactory), parent);
+            return createSynthesizedIdentifier(idText(jsxFactory), parent);
         }
     }
 
-    function createJsxFactoryExpression(jsxFactoryEntity: EntityName | undefined, reactNamespace: string, parent: JsxOpeningLikeElement | JsxOpeningFragment): Expression {
+    function createJsxFactoryExpression(jsxFactoryEntity: EntityName | undefined, jsxMode: JsxEmit, reactNamespace: string, parent: JsxOpeningLikeElement | JsxOpeningFragment): Expression {
         return jsxFactoryEntity ?
             createJsxFactoryExpressionFromEntityName(jsxFactoryEntity, parent) :
+            createJsxCreateElement(jsxMode, reactNamespace, parent);
+    }
+
+    function createJsxCreateElement(jsxMode: JsxEmit, reactNamespace: string, parent: JsxOpeningLikeElement | JsxOpeningFragment) {
+        return jsxMode === JsxEmit.Vue ?
+            createSynthesizedIdentifier("h", parent) :
             createPropertyAccess(
-                createReactNamespace(reactNamespace, parent),
+                createSynthesizedIdentifier(reactNamespace || "React", parent),
                 "createElement"
             );
     }
 
-    export function createExpressionForJsxElement(jsxFactoryEntity: EntityName | undefined, reactNamespace: string, tagName: Expression, props: Expression, children: ReadonlyArray<Expression>, parentElement: JsxOpeningLikeElement, location: TextRange): LeftHandSideExpression {
+    export function createExpressionForJsxElement(jsxFactoryEntity: EntityName | undefined, jsxMode: JsxEmit, reactNamespace: string, tagName: Expression, props: Expression, children: ReadonlyArray<Expression>, parentElement: JsxOpeningLikeElement, location: TextRange): LeftHandSideExpression {
         const argumentsList = [tagName];
         if (props) {
             argumentsList.push(props);
         }
 
         if (children && children.length > 0) {
-            if (!props) {
-                argumentsList.push(createNull());
-            }
-
-            if (children.length > 1) {
-                for (const child of children) {
-                    startOnNewLine(child);
-                    argumentsList.push(child);
-                }
+            if (jsxMode === JsxEmit.Vue) {
+                argumentsList.push(createArrayLiteral(children));
             }
             else {
-                argumentsList.push(children[0]);
+                if (!props) {
+                    argumentsList.push(createNull());
+                }
+
+                if (children.length > 1) {
+                    for (const child of children) {
+                        startOnNewLine(child);
+                        argumentsList.push(child);
+                    }
+                }
+                else {
+                    argumentsList.push(children[0]);
+                }
             }
         }
 
         return setTextRange(
             createCall(
-                createJsxFactoryExpression(jsxFactoryEntity, reactNamespace, parentElement),
+                createJsxFactoryExpression(jsxFactoryEntity, jsxMode, reactNamespace, parentElement),
                 /*typeArguments*/ undefined,
                 argumentsList
             ),
@@ -3270,30 +3281,35 @@ namespace ts {
         );
     }
 
-    export function createExpressionForJsxFragment(jsxFactoryEntity: EntityName | undefined, reactNamespace: string, children: ReadonlyArray<Expression>, parentElement: JsxOpeningFragment, location: TextRange): LeftHandSideExpression {
+    export function createExpressionForJsxFragment(jsxFactoryEntity: EntityName | undefined, jsxMode: JsxEmit, reactNamespace: string, children: ReadonlyArray<Expression>, parentElement: JsxOpeningFragment, location: TextRange): LeftHandSideExpression {
         const tagName = createPropertyAccess(
-            createReactNamespace(reactNamespace, parentElement),
+            createSynthesizedIdentifier(reactNamespace || "React", parentElement),
             "Fragment"
         );
 
         const argumentsList = [<Expression>tagName];
-        argumentsList.push(createNull());
+        if (jsxMode === JsxEmit.Vue) {
+            argumentsList.push(createArrayLiteral(children));
+        }
+        else {
+            argumentsList.push(createNull());
 
-        if (children && children.length > 0) {
-            if (children.length > 1) {
-                for (const child of children) {
-                    startOnNewLine(child);
-                    argumentsList.push(child);
+            if (children && children.length > 0) {
+                if (children.length > 1) {
+                    for (const child of children) {
+                        startOnNewLine(child);
+                        argumentsList.push(child);
+                    }
                 }
-            }
-            else {
-                argumentsList.push(children[0]);
+                else {
+                    argumentsList.push(children[0]);
+                }
             }
         }
 
         return setTextRange(
             createCall(
-                createJsxFactoryExpression(jsxFactoryEntity, reactNamespace, parentElement),
+                createJsxFactoryExpression(jsxFactoryEntity, jsxMode, reactNamespace, parentElement),
                 /*typeArguments*/ undefined,
                 argumentsList
             ),
